@@ -1,47 +1,79 @@
 // MipsEmulator.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
+#include <fstream>
 #include <iostream>
 #include <stdio.h>
 #include "MipsEmulator.h"
+#define _debug 0
 int registers[32];
-int programCounter = 0;
+char programMemory[8092];
+size_t programLen;
+int progMemOffs = 0x00400000;
+int dataMemOffs = 0x10010000;
+int programCounter = progMemOffs;
 
 int main()
 {
+	loadProgram();
+	while(programCounter < progMemOffs + programLen)
+		decodeAndExecute(getInstructionAtProgramCounter());
 	printRegisterSummary();
-	decodeAndExecute(554172424);
+		
+	/*
 	decodeAndExecute(17319968);
 	decodeAndExecute(1898467330);
 	printRegisterSummary();
+	*/
 }
 
+int getInstructionAtProgramCounter() {
+	return int((unsigned char)(programMemory[programCounter-progMemOffs]) << 24 |
+		(unsigned char)(programMemory[programCounter - progMemOffs+1]) << 16 |
+		(unsigned char)(programMemory[programCounter - progMemOffs+2]) << 8 |
+		(unsigned char)(programMemory[programCounter - progMemOffs+3]));
+}
+
+void loadProgram() {
+	std::ifstream infile("../test.mips");
+	infile.seekg(0, infile.end);
+	programLen = infile.tellg();
+	infile.seekg(0, infile.beg);
+	infile.read(programMemory, programLen);
+}
 
 
 // Decodes a 32 bit MIPS instruction and executes the appropriate function
 void decodeAndExecute(int instruction) {
 	programCounter += 4;
-	printf("decoding and executing instruction: (0x%08x)\n", instruction);
+	printf("executing instruction at addr: 0x%08x (0x%08x)\n", programCounter, instruction);
 	registers[0] = 0;
 	char errorMessageBuffer[1024];
 	int op = instruction >> 26 & 0x3f;
-	printf("op: (0x%08x)\n", op);
 	int rs = instruction >> 21 & 0x1f;
-	printf("rs: (0x%08x)\n", rs);
 	int rt = instruction >> 16 & 0x1f;
-	printf("rt: (0x%08x)\n", rt);
 	int rd = instruction >> 11 & 0x1f;
-	printf("rd: (0x%08x)\n", rd);
 	int shamt = instruction >> 6 & 0x1f;
-	printf("shamt: (0x%08x)\n", shamt);
 	int imm = instruction & 0xffff;
-	printf("imm: (0x%08x)\n", imm);
 	int addr = instruction & 0x03ffffff;
-	printf("addr: (0x%08x)\n", addr);
 	int funct = instruction & 0x3f;
-	printf("funct: (0x%08x)", funct);
 
-	//opcode == 0 -> it is an R-type instruction
+#ifdef debug
+	printf("op: (0x%08x)\n", op);
+	printf("rs: (0x%08x)\n", rs);
+	printf("rt: (0x%08x)\n", rt);
+	printf("rd: (0x%08x)\n", rd);
+	printf("shamt: (0x%08x)\n", shamt);
+	printf("imm: (0x%08x)\n", imm);
+	printf("addr: (0x%08x)\n", addr);
+	printf("funct: (0x%08x)", funct);
+#endif
+
+	if (instruction == 0x00000000c) {
+		syscall();
+		return;
+	}
+
 	if (!op || op == 28) {
 		switch (funct) {
 			case 32: add(rd, rs, rt);
@@ -96,6 +128,7 @@ void decodeAndExecute(int instruction) {
 		jal(addr);
 		return;
 	}
+
 	switch (op) {
 		case 8: addi(rt, rs, imm);
 			break;
@@ -131,6 +164,8 @@ void decodeAndExecute(int instruction) {
 			sprintf_s(errorMessageBuffer, 1024, "The instruction was not a valid mips instruction (0x%08x)\n", instruction);
 			throw std::invalid_argument(errorMessageBuffer);
 	}
+
+
 }
 
 void addi(int rt, int rs, int imm) {
@@ -289,39 +324,54 @@ int toBTA(int offset) {
 	return programCounter + signext(offset, 16) * 4;
 }
 
+//Some syscalls are implemented for reading and priting strings and integers. 
+//All syscalls utilizing registers f0-f31 are left out.
+void syscall() {
+	switch ($v0) {
+	case 1: printf("%d", $a0);
+		break;
+	case 4: printf("%s", &$a0);
+		break;
+	case 5: std::cin >> $v0;
+		break;
+	case 11: printf("%c", $a0);
+	}
+}
+
 void printRegisterSummary() {
-	printf("$at: (0x%08x)\n", $at);
-	printf("$v0: (0x%08x)\n", $v0);
-	printf("$v1: (0x%08x)\n", $v1);
-	printf("$a0: (0x%08x)\n", $a0);
-	printf("$a1: (0x%08x)\n", $a1);
-	printf("$a2: (0x%08x)\n", $a2);
-	printf("$a3: (0x%08x)\n", $a3);
-	printf("$t0: (0x%08x)\n", $t0);
-	printf("$t1: (0x%08x)\n", $t1);
-	printf("$t2: (0x%08x)\n", $t2);
-	printf("$t3: (0x%08x)\n", $t3);
-	printf("$t4: (0x%08x)\n", $t4);
-	printf("$t5: (0x%08x)\n", $t5);
-	printf("$t6: (0x%08x)\n", $t6);
-	printf("$t7: (0x%08x)\n", $t7);
-	printf("$s0: (0x%08x)\n", $s0);
-	printf("$s1: (0x%08x)\n", $s1);
-	printf("$s2: (0x%08x)\n", $s2);
-	printf("$s3: (0x%08x)\n", $s3);
-	printf("$s4: (0x%08x)\n", $s4);
-	printf("$s5: (0x%08x)\n", $s5);
-	printf("$s6: (0x%08x)\n", $s6);
-	printf("$s7: (0x%08x)\n", $s7);
-	printf("$t8: (0x%08x)\n", $t8);
-	printf("$t9: (0x%08x)\n", $t9);
-	printf("$k0: (0x%08x)\n", $k0);
-	printf("$t0: (0x%08x)\n", $t0);
-	printf("$k1: (0x%08x)\n", $k1);
-	printf("$gp: (0x%08x)\n", $gp);
-	printf("$sp: (0x%08x)\n", $sp);
-	printf("$fp: (0x%08x)\n", $fp);
-	printf("$ra: (0x%08x)\n", $ra);
+	printf("\n\n");
+	printf("$at: 0x%08x\n", $at);
+	printf("$v0: 0x%08x\n", $v0);
+	printf("$v1: 0x%08x\n", $v1);
+	printf("$a0: 0x%08x\n", $a0);
+	printf("$a1: 0x%08x\n", $a1);
+	printf("$a2: 0x%08x\n", $a2);
+	printf("$a3: 0x%08x\n", $a3);
+	printf("$t0: 0x%08x\n", $t0);
+	printf("$t1: 0x%08x\n", $t1);
+	printf("$t2: 0x%08x\n", $t2);
+	printf("$t3: 0x%08x\n", $t3);
+	printf("$t4: 0x%08x\n", $t4);
+	printf("$t5: 0x%08x\n", $t5);
+	printf("$t6: 0x%08x\n", $t6);
+	printf("$t7: 0x%08x\n", $t7);
+	printf("$s0: 0x%08x\n", $s0);
+	printf("$s1: 0x%08x\n", $s1);
+	printf("$s2: 0x%08x\n", $s2);
+	printf("$s3: 0x%08x\n", $s3);
+	printf("$s4: 0x%08x\n", $s4);
+	printf("$s5: 0x%08x\n", $s5);
+	printf("$s6: 0x%08x\n", $s6);
+	printf("$s7: 0x%08x\n", $s7);
+	printf("$t8: 0x%08x\n", $t8);
+	printf("$t9: 0x%08x\n", $t9);
+	printf("$k0: 0x%08x\n", $k0);
+	printf("$t0: 0x%08x\n", $t0);
+	printf("$k1: 0x%08x\n", $k1);
+	printf("$gp: 0x%08x\n", $gp);
+	printf("$sp: 0x%08x\n", $sp);
+	printf("$fp: 0x%08x\n", $fp);
+	printf("$ra: 0x%08x\n", $ra);
 }
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu

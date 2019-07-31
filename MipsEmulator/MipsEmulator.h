@@ -71,5 +71,7 @@ void xori(int, int, int);
 int toJTA(int);
 int toBTA(int);
 void printRegisterSummary();
-
+void syscall();
+void loadProgram();
+int getInstructionAtProgramCounter();
 int signext(int, int);
