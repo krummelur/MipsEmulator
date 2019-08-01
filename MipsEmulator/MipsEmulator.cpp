@@ -7,39 +7,105 @@
 #include "MipsEmulator.h"
 #define _debug 0
 int registers[32];
-char programMemory[8092];
+char programMemory[totalMemSz];
 size_t programLen;
+size_t dataLen;
+int programSectionSz = 4096;
+int dataSectionSz = 4096;
+int stackSectionSz = 512;
 int progMemOffs = 0x00400000;
 int dataMemOffs = 0x10010000;
+int stackMemOffs = 0x7fffeffc;
 int programCounter = progMemOffs;
 
 int main()
 {
 	loadProgram();
+	$sp = 0x7fffeffc;
 	while(programCounter < progMemOffs + programLen)
 		decodeAndExecute(getInstructionAtProgramCounter());
 	printRegisterSummary();
-		
-	/*
-	decodeAndExecute(17319968);
-	decodeAndExecute(1898467330);
-	printRegisterSummary();
-	*/
+}
+
+int virtualAddrToMemIndex(int address) {
+	//is a stack address
+	if (address > stackMemOffs - stackSectionSz && address <= stackMemOffs) {
+		return totalMemSz - 1 - stackMemOffs - address;
+	}
+	//is data memory
+	if (address >= dataMemOffs && address < dataMemOffs + dataSectionSz) {
+		return address - dataMemOffs;
+	}
+
+	//is program memory
+	if (address >= progMemOffs && address < progMemOffs + programSectionSz) {
+		return dataSectionSz + address - progMemOffs;
+	}
+
+	char errorMessageBuffer[1024];
+	sprintf_s(errorMessageBuffer, 1024, "Trying to address invalid memory segment: (0x%08x)\n", address);
+	throw std::invalid_argument(errorMessageBuffer);
 }
 
 int getInstructionAtProgramCounter() {
-	return int((unsigned char)(programMemory[programCounter-progMemOffs]) << 24 |
-		(unsigned char)(programMemory[programCounter - progMemOffs+1]) << 16 |
-		(unsigned char)(programMemory[programCounter - progMemOffs+2]) << 8 |
-		(unsigned char)(programMemory[programCounter - progMemOffs+3]));
+	return int((unsigned char)(programMemory[programCounter-progMemOffs+dataSectionSz]) << 24 |
+		(unsigned char)(programMemory[programCounter - progMemOffs + dataSectionSz +1]) << 16 |
+		(unsigned char)(programMemory[programCounter - progMemOffs + dataSectionSz + 2]) << 8 |
+		(unsigned char)(programMemory[programCounter - progMemOffs + dataSectionSz + 3]));
+}
+
+char* integerToCharArray(int number) {
+	char result[4];
+	result[3] = number & 0xff;
+	result[2] = number >> 4 & 0xff;
+	result[1] = number >> 8 & 0xff;
+	result[0] = number >> 12 & 0xff;
+	return result;
 }
 
 void loadProgram() {
+	std::string programString = ".text";
+	std::string dataString = ".data";
 	std::ifstream infile("../test.mips");
+
 	infile.seekg(0, infile.end);
-	programLen = infile.tellg();
+	int inputDataLen = infile.tellg();
+	char* inputFileData = (char*) malloc(inputDataLen);
 	infile.seekg(0, infile.beg);
-	infile.read(programMemory, programLen);
+	infile.read(inputFileData, inputDataLen);
+	std::string inputDataStr(inputFileData);
+	size_t dataStringOffset = inputDataStr.find(dataString);
+	size_t progStringOffset = inputDataStr.find(programString);
+	char c = inputDataStr[1];
+	if (progStringOffset == 0 || dataStringOffset > progStringOffset) {
+		throw std::invalid_argument("The file segment were missing or in wrong order, data segment must come before program segment");
+	}
+	
+	dataLen = dataStringOffset + progStringOffset - dataString.length();
+	programLen = inputDataLen - dataLen - dataString.length() - programString.length();
+	int i, j;
+	
+	
+	for (i = dataString.length(), j = 0; i < dataLen; i++, j++) {
+		programMemory[j] = inputFileData[i];
+	}
+
+
+	for (i = programString.length() + progStringOffset, j = 0; j < programLen; i++, j++) {
+		programMemory[j + dataSectionSz] = inputFileData[i];
+	}
+	
+	
+	//infile.seekg(dataString.length() + dataStringOffset);
+	//infile.read(programMemory, dataLen);
+	
+	//infile.seekg(programString.length() + progStringOffset);
+	//infile.read(programMemory, programLen);
+	
+
+
+	free(inputFileData);
+	infile.close();
 }
 
 
@@ -190,15 +256,21 @@ void bne(int rt, int rs, int imm) {
 		programCounter = toBTA(imm);
 }
 
-void lb(int rt, int addr) {}
+void lb(int rt, int addr) {
+	registers[rt] = signext((int)programMemory[virtualAddrToMemIndex(addr)],8);
+}
 
-void lbu(int rt, int addr) {}
+void lbu(int rt, int addr) { 
+	registers[rt] = (int)programMemory[virtualAddrToMemIndex(addr)];
+}
 
 void lui(int rt, int imm) {
 	registers[rt] = imm << 16;
 }
 
-void lw(int rt, int addr) {}
+void lw(int rt, int addr) {
+	registers[rt] = programMemory[virtualAddrToMemIndex(addr)];
+}
 
 void ori(int rt, int rs, int imm) {
 	registers[rt] = registers[rs] | imm;
@@ -212,9 +284,18 @@ void sltiu(int rt, int rs, int imm) {
 	registers[rt] = (unsigned int)registers[rs] < (unsigned int)signext(imm, 16);
 }
 
-void sb(int rt, int imm) {}
+void sb(int rt, int imm) {
+	char* registerAsCharArray = integerToCharArray(registers[rt]);
+		programMemory[virtualAddrToMemIndex(imm)] = registerAsCharArray[0];
+}
 
-void sw(int rt, int imm) {}
+void sw(int rt, int imm) {
+	char* registerAsCharArray = integerToCharArray(registers[rt]);
+	int i;
+	for (i = 0; i < 4; i++) {
+	programMemory[virtualAddrToMemIndex(imm)+i] = registerAsCharArray[i];
+	}
+}
 
 void xori(int rt, int rs, int imm) {
 	registers[rt] = registers[rs] ^ signext(imm, 16);
@@ -283,8 +364,9 @@ void srlv(int rd, int rs, int rt) {
 
 
 int signext(int num, int len) {
-	if (num >> len) {
-		num = num | 0xffc0;
+	int test = num >> (len-1);
+	if (num >> (len-1)) {
+		num = num | ~0x0<<len;
 	}
 	return num;
 }
@@ -321,6 +403,7 @@ int toJTA(int address) {
 }
 
 int toBTA(int offset) {
+	int test = signext(offset, 16);
 	return programCounter + signext(offset, 16) * 4;
 }
 
@@ -328,13 +411,13 @@ int toBTA(int offset) {
 //All syscalls utilizing registers f0-f31 are left out.
 void syscall() {
 	switch ($v0) {
-	case 1: printf("%d", $a0);
+	case 1: printf("%d\n", $a0);
 		break;
-	case 4: printf("%s", &$a0);
+	case 4: printf("%s\n", &$a0);
 		break;
 	case 5: std::cin >> $v0;
 		break;
-	case 11: printf("%c", $a0);
+	case 11: printf("%c\n", $a0);
 	}
 }
 
@@ -373,14 +456,3 @@ void printRegisterSummary() {
 	printf("$fp: 0x%08x\n", $fp);
 	printf("$ra: 0x%08x\n", $ra);
 }
-
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
