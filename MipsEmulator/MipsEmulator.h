@@ -31,6 +31,7 @@
 #define $sp registers[29]
 #define $fp registers[30]
 #define $ra registers[31]
+
 const int totalMemSz = 16184;
 void decodeAndExecute(int);
 

@@ -4,10 +4,12 @@
 #include <fstream>
 #include <iostream>
 #include <stdio.h>
+#include <vector>
+#include <algorithm> 
 #include "MipsEmulator.h"
 #define _debug 0
 int registers[32];
-char programMemory[totalMemSz];
+char* programMemory = (char*) malloc(totalMemSz);
 size_t programLen;
 size_t dataLen;
 int programSectionSz = 4096;
@@ -48,10 +50,11 @@ int virtualAddrToMemIndex(int address) {
 }
 
 int getInstructionAtProgramCounter() {
-	return int((unsigned char)(programMemory[programCounter-progMemOffs+dataSectionSz]) << 24 |
-		(unsigned char)(programMemory[programCounter - progMemOffs + dataSectionSz +1]) << 16 |
-		(unsigned char)(programMemory[programCounter - progMemOffs + dataSectionSz + 2]) << 8 |
-		(unsigned char)(programMemory[programCounter - progMemOffs + dataSectionSz + 3]));
+	int firstByte = programCounter - progMemOffs + dataSectionSz;
+	return int((unsigned char)(programMemory[firstByte]) << 24 |
+		(unsigned char)(programMemory[firstByte + 1]) << 16 |
+		(unsigned char)(programMemory[firstByte + 2]) << 8 |
+		(unsigned char)(programMemory[firstByte + 3]));
 }
 
 char* integerToCharArray(int number) {
@@ -64,8 +67,8 @@ char* integerToCharArray(int number) {
 }
 
 void loadProgram() {
-	std::string programString = ".text";
-	std::string dataString = ".data";
+	const char* programString = (char*) ".text";
+	const char* dataString = (char*) ".data";
 	std::ifstream infile("../test.mips");
 
 	infile.seekg(0, infile.end);
@@ -73,46 +76,28 @@ void loadProgram() {
 	char* inputFileData = (char*) malloc(inputDataLen);
 	infile.seekg(0, infile.beg);
 	infile.read(inputFileData, inputDataLen);
-	std::string inputDataStr(inputFileData);
-	size_t dataStringOffset = inputDataStr.find(dataString);
-	size_t progStringOffset = inputDataStr.find(programString);
-	char c = inputDataStr[1];
-	if (progStringOffset == 0 || dataStringOffset > progStringOffset) {
+
+	char* dataStartAddr = std::search(inputFileData, inputFileData + inputDataLen, dataString, dataString + 5);
+	char* programStartAddr = std::search(inputFileData, inputFileData + inputDataLen, programString, programString + 5);
+
+	if (programStartAddr == inputFileData || dataStartAddr > programStartAddr) {
 		throw std::invalid_argument("The file segment were missing or in wrong order, data segment must come before program segment");
 	}
-	
-	dataLen = dataStringOffset + progStringOffset - dataString.length();
-	programLen = inputDataLen - dataLen - dataString.length() - programString.length();
-	int i, j;
-	
-	
-	for (i = dataString.length(), j = 0; i < dataLen; i++, j++) {
-		programMemory[j] = inputFileData[i];
-	}
 
-
-	for (i = programString.length() + progStringOffset, j = 0; j < programLen; i++, j++) {
-		programMemory[j + dataSectionSz] = inputFileData[i];
-	}
-	
-	
-	//infile.seekg(dataString.length() + dataStringOffset);
-	//infile.read(programMemory, dataLen);
-	
-	//infile.seekg(programString.length() + progStringOffset);
-	//infile.read(programMemory, programLen);
-	
-
+	std::copy(dataStartAddr + 5, programStartAddr, programMemory);
+	std::copy(programStartAddr + 5, (inputFileData + inputDataLen), programMemory + dataSectionSz);
+	programLen = inputDataLen - (programStartAddr - dataStartAddr);
+	dataLen = dataStartAddr - programStartAddr - 5;
 
 	free(inputFileData);
 	infile.close();
 }
 
-
 // Decodes a 32 bit MIPS instruction and executes the appropriate function
 void decodeAndExecute(int instruction) {
 	programCounter += 4;
 	printf("executing instruction at addr: 0x%08x (0x%08x)\n", programCounter, instruction);
+
 	registers[0] = 0;
 	char errorMessageBuffer[1024];
 	int op = instruction >> 26 & 0x3f;
@@ -230,8 +215,6 @@ void decodeAndExecute(int instruction) {
 			sprintf_s(errorMessageBuffer, 1024, "The instruction was not a valid mips instruction (0x%08x)\n", instruction);
 			throw std::invalid_argument(errorMessageBuffer);
 	}
-
-
 }
 
 void addi(int rt, int rs, int imm) {
@@ -455,4 +438,5 @@ void printRegisterSummary() {
 	printf("$sp: 0x%08x\n", $sp);
 	printf("$fp: 0x%08x\n", $fp);
 	printf("$ra: 0x%08x\n", $ra);
+
 }
