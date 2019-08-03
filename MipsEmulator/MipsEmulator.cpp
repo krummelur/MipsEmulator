@@ -69,7 +69,7 @@ char* integerToCharArray(int number) {
 void loadProgram() {
 	const char* programString = (char*) ".text";
 	const char* dataString = (char*) ".data";
-	std::ifstream infile("../test.mips");
+	std::ifstream infile("../print-string-from-data.mips");
 
 	infile.seekg(0, infile.end);
 	int inputDataLen = infile.tellg();
@@ -84,10 +84,11 @@ void loadProgram() {
 		throw std::invalid_argument("The file segment were missing or in wrong order, data segment must come before program segment");
 	}
 
+	programLen = inputDataLen - (programStartAddr - dataStartAddr) - 5;
+	dataLen = programStartAddr - dataStartAddr - 5;
+	inPlaceLittleEndianToBigEndian(dataStartAddr + 5, dataLen / 4);
 	std::copy(dataStartAddr + 5, programStartAddr, programMemory);
 	std::copy(programStartAddr + 5, (inputFileData + inputDataLen), programMemory + dataSectionSz);
-	programLen = inputDataLen - (programStartAddr - dataStartAddr);
-	dataLen = dataStartAddr - programStartAddr - 5;
 
 	free(inputFileData);
 	infile.close();
@@ -96,7 +97,9 @@ void loadProgram() {
 // Decodes a 32 bit MIPS instruction and executes the appropriate function
 void decodeAndExecute(int instruction) {
 	programCounter += 4;
+
 	printf("executing instruction at addr: 0x%08x (0x%08x)\n", programCounter, instruction);
+
 
 	registers[0] = 0;
 	char errorMessageBuffer[1024];
@@ -191,13 +194,13 @@ void decodeAndExecute(int instruction) {
 			break;
 		case 5: bne(rs, rt, imm);
 			break;
-		case 32: lb(rt, rs + imm);
+		case 32: lb(rt, rs, imm);
 			break;
-		case 36: lbu(rt, rs + imm);
+		case 36: lbu(rt, rs, imm);
 			break;
 		case 15: lui(rt, imm);
 			break;
-		case 35: lw(rt, rs + imm);
+		case 35: lw(rt, rs, imm);
 			break;
 		case 13: ori(rt, rs, imm);
 			break;
@@ -205,9 +208,9 @@ void decodeAndExecute(int instruction) {
 			break;
 		case 11: sltiu(rt, rs, imm);
 			break;
-		case 40: sb(rt, rs + imm);
+		case 40: sb(rt, rs, imm);
 			break;
-		case 43: sw(rt, rs + imm);
+		case 43: sw(rt, rs, imm);
 			break;
 		case 14: xori(rt, rs, imm);
 			break;
@@ -239,20 +242,20 @@ void bne(int rt, int rs, int imm) {
 		programCounter = toBTA(imm);
 }
 
-void lb(int rt, int addr) {
-	registers[rt] = signext((int)programMemory[virtualAddrToMemIndex(addr)],8);
+void lb(int rt, int rs, int imm) {
+	registers[rt] = signext((int)programMemory[virtualAddrToMemIndex(registers[rs]+ signext(imm,8))],8);
 }
 
-void lbu(int rt, int addr) { 
-	registers[rt] = (int)programMemory[virtualAddrToMemIndex(addr)];
+void lbu(int rt, int rs, int imm) { 
+	registers[rt] = (int)programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm,8))];
 }
 
 void lui(int rt, int imm) {
 	registers[rt] = imm << 16;
 }
 
-void lw(int rt, int addr) {
-	registers[rt] = programMemory[virtualAddrToMemIndex(addr)];
+void lw(int rt, int rs, int imm) {
+	registers[rt] = programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm, 8))];
 }
 
 void ori(int rt, int rs, int imm) {
@@ -267,22 +270,23 @@ void sltiu(int rt, int rs, int imm) {
 	registers[rt] = (unsigned int)registers[rs] < (unsigned int)signext(imm, 16);
 }
 
-void sb(int rt, int imm) {
-	char* registerAsCharArray = integerToCharArray(registers[rt]);
-		programMemory[virtualAddrToMemIndex(imm)] = registerAsCharArray[0];
+void sb(int rt, int rs, int imm) {
+	int byteToStore = integerToCharArray(registers[rt])[0];
+	programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm,8))] = byteToStore;
 }
 
-void sw(int rt, int imm) {
+void sw(int rt, int rs, int imm) {
 	char* registerAsCharArray = integerToCharArray(registers[rt]);
 	int i;
 	for (i = 0; i < 4; i++) {
-	programMemory[virtualAddrToMemIndex(imm)+i] = registerAsCharArray[i];
+	programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm,8))+i] = registerAsCharArray[i];
 	}
 }
 
 void xori(int rt, int rs, int imm) {
 	registers[rt] = registers[rs] ^ signext(imm, 16);
 }
+
 // Sign extends and adds the values from 2 registers and puts it into a third register
 void add(int rd, int rs, int rt) {
 	registers[rd] = registers[signext(rs,6)] + registers[signext(rt,6)];
@@ -349,7 +353,7 @@ void srlv(int rd, int rs, int rt) {
 int signext(int num, int len) {
 	int test = num >> (len-1);
 	if (num >> (len-1)) {
-		num = num | ~0x0<<len;
+		num = num | ~0x0 << len;
 	}
 	return num;
 }
@@ -396,11 +400,24 @@ void syscall() {
 	switch ($v0) {
 	case 1: printf("%d\n", $a0);
 		break;
-	case 4: printf("%s\n", &$a0);
+	case 4: printf("%s\n", (char*) &programMemory[virtualAddrToMemIndex($a0)]);
 		break;
 	case 5: std::cin >> $v0;
 		break;
 	case 11: printf("%c\n", $a0);
+	}
+}
+
+void inPlaceLittleEndianToBigEndian(char* data, int numWords) {
+	int i;
+	for (i = 0; i < numWords; i++) {
+		int byteIndex = i * 4;
+		char byte1 = *(data + byteIndex);
+		char byte2 = *(data + byteIndex + 1);
+		*(data + byteIndex) = *(data + byteIndex + 3);
+		*(data + byteIndex + 1) = *(data + byteIndex + 2);
+		*(data + byteIndex + 2) = byte2;
+		*(data + byteIndex + 3) = byte1;
 	}
 }
 

@@ -1,5 +1,5 @@
 #pragma once
-#define $zero 0;
+#define $zero 0
 #define $at registers[1]
 #define $v0 registers[2]
 #define $v1 registers[3]
@@ -60,15 +60,15 @@ void addiu(int, int, int);
 void andi(int, int, int);
 void beq(int, int, int);
 void bne(int, int, int);
-void lb(int, int);
-void lbu(int, int);
+void lb(int, int, int);
+void lbu(int, int, int);
 void lui(int, int);
-void lw(int, int);
+void lw(int, int, int);
 void ori(int, int, int);
 void slti(int, int, int);
 void sltiu(int, int, int);
-void sb(int, int);
-void sw(int, int);
+void sb(int, int, int);
+void sw(int, int, int);
 void xori(int, int, int);
 int toJTA(int);
 int toBTA(int);
@@ -78,3 +78,4 @@ void loadProgram();
 int getInstructionAtProgramCounter();
 int signext(int, int);
 int virtualAddrToMemIndex(int);
+void inPlaceLittleEndianToBigEndian(char*, int);
