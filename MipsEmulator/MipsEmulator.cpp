@@ -4,12 +4,20 @@
 #include <fstream>
 #include <iostream>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 #include <vector>
-#include <algorithm> 
+#include <algorithm>
+#include <windows.h>
 #include "MipsEmulator.h"
-#define _debug 0
+//#define DEBUG
+//#define VERBOSE_DEBUG
+//#define REGISTER_DEBUG
+
+
 int registers[32];
 char* programMemory = (char*) malloc(totalMemSz);
+char stackPTR[128];
 size_t programLen;
 size_t dataLen;
 int programSectionSz = 4096;
@@ -22,17 +30,20 @@ int programCounter = progMemOffs;
 
 int main()
 {
+	int instructions_exec = 0;
+	srand(time(NULL));
 	loadProgram();
 	$sp = 0x7fffeffc;
-	while(programCounter < progMemOffs + programLen)
+	while (programCounter < progMemOffs + programLen) {
 		decodeAndExecute(getInstructionAtProgramCounter());
+	}
 	printRegisterSummary();
 }
 
 int virtualAddrToMemIndex(int address) {
 	//is a stack address
-	if (address > stackMemOffs - stackSectionSz && address <= stackMemOffs) {
-		return totalMemSz - 1 - stackMemOffs - address;
+	if (address > (stackMemOffs - stackSectionSz) && address <= stackMemOffs) {
+		return totalMemSz - (stackMemOffs - address) - 1;
 	}
 	//is data memory
 	if (address >= dataMemOffs && address < dataMemOffs + dataSectionSz) {
@@ -57,19 +68,29 @@ int getInstructionAtProgramCounter() {
 		(unsigned char)(programMemory[firstByte + 3]));
 }
 
-char* integerToCharArray(int number) {
-	char result[4];
-	result[3] = number & 0xff;
-	result[2] = number >> 4 & 0xff;
-	result[1] = number >> 8 & 0xff;
-	result[0] = number >> 12 & 0xff;
-	return result;
+int charArrayToInteger(char* charArray) {
+	int result = charArray[3] & 0xff;
+	result |= (charArray[2] & 0xff) << 8;
+	result |= (charArray[1] & 0xff) << 16;
+	return result | (charArray[0] & 0xff) << 24;
+}
+
+void integerToCharArray(int number, char* result) {
+	int i = number & 0xff;
+	*(result + 3) = number & 0xff;
+	int j = number >> 8 & 0xff;
+	*(result + 2) = number >> 8 & 0xff;
+	int k = number >> 16 & 0xff;
+	*(result + 1) = number >> 16 & 0xff;
+	int l = number >> 24 & 0xff;
+	*(result + 0) = number >> 24 & 0xff;
 }
 
 void loadProgram() {
 	const char* programString = (char*) ".text";
 	const char* dataString = (char*) ".data";
-	std::ifstream infile("../print-string-from-data.mips");
+	//std::ifstream infile("../print-string-from-data.mips");
+	std::ifstream infile("../factorial.mips");
 
 	infile.seekg(0, infile.end);
 	int inputDataLen = infile.tellg();
@@ -86,7 +107,7 @@ void loadProgram() {
 
 	programLen = inputDataLen - (programStartAddr - dataStartAddr) - 5;
 	dataLen = programStartAddr - dataStartAddr - 5;
-	inPlaceLittleEndianToBigEndian(dataStartAddr + 5, dataLen / 4);
+	//inPlaceLittleEndianToBigEndian(dataStartAddr + 5, dataLen / 4);
 	std::copy(dataStartAddr + 5, programStartAddr, programMemory);
 	std::copy(programStartAddr + 5, (inputFileData + inputDataLen), programMemory + dataSectionSz);
 
@@ -96,9 +117,10 @@ void loadProgram() {
 
 // Decodes a 32 bit MIPS instruction and executes the appropriate function
 void decodeAndExecute(int instruction) {
-	programCounter += 4;
-
+#ifdef DEBUG
 	printf("executing instruction at addr: 0x%08x (0x%08x)\n", programCounter, instruction);
+#endif
+	programCounter += 4;
 
 
 	registers[0] = 0;
@@ -112,7 +134,7 @@ void decodeAndExecute(int instruction) {
 	int addr = instruction & 0x03ffffff;
 	int funct = instruction & 0x3f;
 
-#ifdef debug
+#ifdef REGISTER_DEBUG
 	printf("op: (0x%08x)\n", op);
 	printf("rs: (0x%08x)\n", rs);
 	printf("rt: (0x%08x)\n", rt);
@@ -160,6 +182,8 @@ void decodeAndExecute(int instruction) {
 				else 
 					mul(rd, rs, rt);
 				break;
+			case 25: mul(rd, rs, rt);
+				break;
 			case 6: srlv(rd, rt, rs);
 				break;
 			case 34: sub(rd, rs, rt);
@@ -167,6 +191,8 @@ void decodeAndExecute(int instruction) {
 			case 35: subu(rd, rs, rt);
 				break;
 			case 38: _xor(rd, rs, rt);
+				break;
+			case 18: // MFLO not implemented
 				break;
 		default: 
 			sprintf_s(errorMessageBuffer, 1024, "The instruction was not a valid mips instruction (0x%08x)\n", instruction);
@@ -255,7 +281,16 @@ void lui(int rt, int imm) {
 }
 
 void lw(int rt, int rs, int imm) {
-	registers[rt] = programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm, 8))];
+	if (programCounter == 0x004000a8) {
+		printf("");
+	}
+	int virtualAddress = registers[rs] + signext(imm, 8);
+	int memIndex = virtualAddrToMemIndex(virtualAddress);
+	int valueToLoad = charArrayToInteger((char*)(programMemory + memIndex));
+	registers[rt] = valueToLoad;
+#ifdef VERBOSE_DEBUG
+	printf("loading value (0x%08x) from: (0x%08x) into: register: %d\n MEMINDEX:(%d)", valueToLoad, virtualAddress, rt, memIndex);
+#endif
 }
 
 void ori(int rt, int rs, int imm) {
@@ -271,16 +306,22 @@ void sltiu(int rt, int rs, int imm) {
 }
 
 void sb(int rt, int rs, int imm) {
-	int byteToStore = integerToCharArray(registers[rt])[0];
+	char mutableArray[4];
+	integerToCharArray(registers[rt], mutableArray);
+	int byteToStore = mutableArray[0];
 	programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm,8))] = byteToStore;
 }
 
 void sw(int rt, int rs, int imm) {
-	char* registerAsCharArray = integerToCharArray(registers[rt]);
+	char mutableArray[4];
+	integerToCharArray(registers[rt], mutableArray);
 	int i;
 	for (i = 0; i < 4; i++) {
-	programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm,8))+i] = registerAsCharArray[i];
+	programMemory[virtualAddrToMemIndex(registers[rs] + signext(imm,8))+i] = mutableArray[i];
 	}
+#ifdef VERBOSE_DEBUG
+	printf("storing value (0x%08x) to (0x%08x)\n", registers[rt], registers[rs] + signext(imm, 8));
+#endif
 }
 
 void xori(int rt, int rs, int imm) {
@@ -386,25 +427,55 @@ void jal(int address) {
 
 
 int toJTA(int address) {
-	return programCounter = programCounter & 0xf0000 | (address << 2 & 0x0fffc);
+	int JTA = programCounter & 0xf00000000 | (address * 4 & 0x0fffffff);
+	return JTA;
 }
 
 int toBTA(int offset) {
-	int test = signext(offset, 16);
-	return programCounter + signext(offset, 16) * 4;
+	int BTA = programCounter + signext(offset, 16) * 4;
+	return BTA;
 }
 
 //Some syscalls are implemented for reading and priting strings and integers. 
 //All syscalls utilizing registers f0-f31 are left out.
 void syscall() {
 	switch ($v0) {
-	case 1: printf("%d\n", $a0);
-		break;
-	case 4: printf("%s\n", (char*) &programMemory[virtualAddrToMemIndex($a0)]);
-		break;
-	case 5: std::cin >> $v0;
-		break;
-	case 11: printf("%c\n", $a0);
+		case 1: printf("%d", $a0);
+			break;
+		case 4: printf("%s", (char*) &programMemory[virtualAddrToMemIndex($a0)]);
+			break;
+		case 5: std::cin >> $v0;
+			break;
+		case 10: 
+			printf("\n\n==the program has finished running==\nRegister state at end of program:\n");
+			printRegisterSummary();
+			exit(0);
+			break;
+		case 11: printf("%c", $a0);
+			break;
+		case 32:
+			Sleep($a0);
+		case 34: printf("0x%08x", $a0);
+			break;
+		case 35:
+			int i;
+			for (i = 0; i < 8; i++) {
+				int mask = 0x1;
+				printf("%d", ($a0 >> 7-i) & mask);
+			}
+			break;
+		case 36: 
+			printf("%d", (unsigned int)$a0);
+			break;
+		case 40:
+			$a0 = rand();
+			break;
+		case 41:
+			$a0 = rand();
+			break;
+		case 42:
+			$a0 = rand() % $a1;
+			break;
 	}
 }
 
@@ -422,7 +493,6 @@ void inPlaceLittleEndianToBigEndian(char* data, int numWords) {
 }
 
 void printRegisterSummary() {
-	printf("\n\n");
 	printf("$at: 0x%08x\n", $at);
 	printf("$v0: 0x%08x\n", $v0);
 	printf("$v1: 0x%08x\n", $v1);
